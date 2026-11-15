@@ -1,0 +1,8 @@
+# Dependencias mínimas para desplegar el dashboard (Streamlit Community Cloud usa este archivo).
+# scikit-learn debe coincidir con la versión con la que se entrenaron los modelos de artefactos/.
+pandas==2.2.3
+numpy==2.4.6
+scikit-learn==1.9.1
+joblib==1.6.0
+streamlit>=1.40,<2
+plotly>=5.24,<7

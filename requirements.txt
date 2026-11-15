@@ -1,0 +1,17 @@
+# Entorno completo: pipeline (src/), dashboard (dashboard/) y cuaderno (notebooks/).
+# Versiones del entorno en el que se ejecutó el cuaderno de las Fases 1 a 3.
+pandas==2.2.3
+numpy==2.4.6
+scikit-learn==1.9.1
+joblib==1.6.0
+seaborn==0.13.2
+
+# Dashboard
+streamlit>=1.40,<2
+plotly>=5.24,<7
+
+# Cuaderno: pruebas estadísticas, perceptrón multicapa e interpretabilidad
+scipy>=1.13
+matplotlib>=3.9
+shap>=0.46
+torch>=2.4
