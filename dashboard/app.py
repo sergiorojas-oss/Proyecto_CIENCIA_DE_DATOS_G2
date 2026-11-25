@@ -202,6 +202,121 @@ with pest_resumen:
         fig.update_layout(showlegend=False, margin=dict(t=50, b=10))
         grafico(fig)
 
+    # ----------------------------------------------------------------------------------------
+    # Análisis por modelo de equipo (NOMBRE_EQUIPO) y tecnología de conectividad
+    # ----------------------------------------------------------------------------------------
+    st.divider()
+    st.markdown("##### ¿Qué equipos y tecnologías se dañan más?")
+    st.caption("El número de tickets depende de cuántos terminales de cada modelo hay instalados, por eso el "
+               "daño se mide con proporciones: **% de fallas de hardware** (Datáfono no enciende, Falla del pin, "
+               "Daño o bloqueo, Tamper) y **% de visitas que necesitaron repuesto**. Los modelos con pocos "
+               "tickets se ocultan en los porcentajes para que no distorsionen la comparación.")
+
+    ctl1, ctl2 = st.columns(2)
+    with ctl1:
+        min_tickets = st.slider("Mínimo de tickets por modelo para comparar porcentajes", 10, 500, 30, 10,
+                                key="min_tickets_equipo")
+    with ctl2:
+        top_n = st.slider("Modelos a mostrar en el volumen", 5, 30, 15, key="top_equipos")
+
+    base = datos.assign(es_hardware=(datos["grupo_falla"] == "Hardware").astype(int))
+    por_equipo = base.groupby("NOMBRE_EQUIPO").agg(
+        tickets=("ID_Llamada", "count"), pct_hardware=("es_hardware", "mean"),
+        pct_repuesto=("requiere_repuesto", "mean"), dias=("dias_resolucion", "mean"),
+        comercios=("USUARIO", "nunique"),
+        tecnologia=("TECNOLOGIA", lambda s: s.mode().iat[0] if not s.mode().empty else "Sin registro"),
+    ).reset_index()
+    por_equipo["tickets_por_comercio"] = por_equipo["tickets"] / por_equipo["comercios"].clip(lower=1)
+    comparables = por_equipo[por_equipo["tickets"] >= min_tickets]
+
+    izq, der = st.columns(2)
+    with izq:
+        top_equipos = por_equipo.nlargest(top_n, "tickets")["NOMBRE_EQUIPO"]
+        vol = (base[base["NOMBRE_EQUIPO"].isin(top_equipos)]
+               .groupby(["NOMBRE_EQUIPO", "grupo_falla"]).size().rename("tickets").reset_index())
+        fig = px.bar(vol, x="tickets", y="NOMBRE_EQUIPO", color="grupo_falla", orientation="h",
+                     color_discrete_map=COLORES_GRUPO, title=f"Tickets por modelo de equipo (top {top_n})",
+                     category_orders={"NOMBRE_EQUIPO": list(top_equipos)},
+                     labels={"tickets": "Tickets", "NOMBRE_EQUIPO": "", "grupo_falla": "Grupo"})
+        fig.update_layout(margin=dict(t=50, b=10), legend=dict(orientation="h", y=-0.2),
+                          height=max(380, 26 * len(top_equipos) + 120))
+        grafico(fig)
+    with der:
+        if comparables.empty:
+            st.info("Ningún modelo alcanza el mínimo de tickets con los filtros actuales; baje el mínimo.")
+        else:
+            fig = px.scatter(comparables, x="pct_hardware", y="pct_repuesto", size="tickets", color="tecnologia",
+                             hover_name="NOMBRE_EQUIPO", size_max=40,
+                             hover_data={"tickets": ":,", "dias": ":.1f", "comercios": ":,",
+                                         "pct_hardware": ":.1%", "pct_repuesto": ":.1%", "tecnologia": True},
+                             title="Mapa de daño por modelo (arriba a la derecha = se daña más)",
+                             labels={"pct_hardware": "% fallas de hardware", "pct_repuesto": "% con repuesto",
+                                     "tecnologia": "Tecnología principal", "tickets": "Tickets",
+                                     "dias": "Días promedio", "comercios": "Comercios"})
+            fig.add_vline(x=base["es_hardware"].mean(), line_dash="dot", line_color="grey")
+            fig.add_hline(y=base["requiere_repuesto"].mean(), line_dash="dot", line_color="grey")
+            fig.update_layout(margin=dict(t=50, b=10), legend=dict(orientation="h", y=-0.2), height=460,
+                              xaxis_tickformat=".0%", yaxis_tickformat=".0%")
+            grafico(fig)
+            st.caption("Las líneas punteadas son el promedio de los tickets filtrados. Los modelos del cuadrante "
+                       "superior derecho fallan por hardware y consumen repuestos por encima del promedio.")
+
+    izq, der = st.columns(2)
+    with izq:
+        por_tec = base.groupby("TECNOLOGIA").agg(
+            tickets=("ID_Llamada", "count"), pct_hardware=("es_hardware", "mean"),
+            pct_repuesto=("requiere_repuesto", "mean"), dias=("dias_resolucion", "mean")).reset_index()
+        mezcla = (base.groupby(["TECNOLOGIA", "grupo_falla"]).size().rename("tickets").reset_index())
+        mezcla["participacion"] = mezcla["tickets"] / mezcla.groupby("TECNOLOGIA")["tickets"].transform("sum")
+        orden_tec = por_tec.sort_values("pct_hardware", ascending=False)["TECNOLOGIA"].tolist()
+        fig = px.bar(mezcla, x="TECNOLOGIA", y="participacion", color="grupo_falla",
+                     color_discrete_map=COLORES_GRUPO, category_orders={"TECNOLOGIA": orden_tec},
+                     hover_data={"tickets": ":,", "participacion": ":.1%"},
+                     title="Tipo de falla dentro de cada tecnología",
+                     labels={"TECNOLOGIA": "", "participacion": "% de los tickets", "grupo_falla": "Grupo",
+                             "tickets": "Tickets"})
+        fig.update_layout(margin=dict(t=50, b=10), legend=dict(orientation="h", y=-0.2), yaxis_tickformat=".0%")
+        grafico(fig)
+    with der:
+        metrica_mapa = st.radio("Métrica del mapa de calor", ["% fallas de hardware", "% con repuesto", "Tickets"],
+                                horizontal=True, key="metrica_mapa_equipo")
+        columna_mapa = {"% fallas de hardware": "es_hardware", "% con repuesto": "requiere_repuesto",
+                        "Tickets": "ID_Llamada"}[metrica_mapa]
+        agregacion = "count" if metrica_mapa == "Tickets" else "mean"
+        cruce = base[base["NOMBRE_EQUIPO"].isin(comparables["NOMBRE_EQUIPO"])]
+        if cruce.empty:
+            st.info("Sin modelos suficientes para el mapa de calor con los filtros actuales.")
+        else:
+            matriz = cruce.pivot_table(index="NOMBRE_EQUIPO", columns="TECNOLOGIA", values=columna_mapa,
+                                       aggfunc=agregacion)
+            conteo = cruce.pivot_table(index="NOMBRE_EQUIPO", columns="TECNOLOGIA", values="ID_Llamada",
+                                       aggfunc="count")
+            if agregacion == "mean":
+                matriz = matriz.where(conteo >= 10)  # celdas con menos de 10 tickets no son confiables
+            matriz = matriz.loc[matriz.max(axis=1).sort_values(ascending=False).index]
+            fig = px.imshow(matriz, aspect="auto", color_continuous_scale="Reds",
+                            text_auto=",.0f" if agregacion == "count" else ".0%",
+                            title=f"Modelo × tecnología · {metrica_mapa}",
+                            labels={"x": "", "y": "", "color": metrica_mapa})
+            if agregacion == "mean":
+                fig.update_layout(coloraxis_colorbar=dict(tickformat=".0%"))
+            fig.update_layout(margin=dict(t=50, b=10), height=max(380, 26 * len(matriz) + 120))
+            grafico(fig)
+            if agregacion == "mean":
+                st.caption("Las celdas vacías tienen menos de 10 tickets o no existen en los datos.")
+
+    with st.expander("Ranking de modelos de equipo por daño", expanded=False):
+        ranking = comparables.sort_values(["pct_hardware", "pct_repuesto"], ascending=False)
+        ranking = ranking.assign(pct_hardware=ranking["pct_hardware"] * 100,
+                                 pct_repuesto=ranking["pct_repuesto"] * 100)
+        tabla(ranking[["NOMBRE_EQUIPO", "tecnologia", "tickets", "comercios", "tickets_por_comercio",
+                       "pct_hardware", "pct_repuesto", "dias"]]
+              .rename(columns={"NOMBRE_EQUIPO": "Modelo", "tecnologia": "Tecnología principal",
+                               "tickets": "Tickets", "comercios": "Comercios",
+                               "tickets_por_comercio": "Tickets por comercio", "pct_hardware": "% hardware",
+                               "pct_repuesto": "% con repuesto", "dias": "Días promedio"}).round(1),
+              hide_index=True)
+
     repuestos = (datos.loc[datos["repuesto_principal"] != "Ninguno", "repuesto_principal"]
                  .value_counts().head(8).rename_axis("repuesto").reset_index(name="visitas"))
     if not repuestos.empty:
